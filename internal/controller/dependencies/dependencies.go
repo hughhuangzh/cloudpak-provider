@@ -59,22 +59,24 @@ const (
 	errObserveDependency = "observe dependencies error"
 	errCreateDependency  = "create dependencies error"
 
-	errNewClient   = "cannot create new Service"
-	aiopsNamespace = "aiops"
+	errNewClient     = "cannot create new Service"
+	aiopsNamespace   = "aiops"
+	OCPConfNamespace = "openshift-config"
 
-	DNamespace              = "Namespace"
-	DImageContentPolicy     = "ImageContentPolicy"
-	DImageContentPolicyName = "mirror-config"
-	DImagePullSecret        = "ImagePullSecret"
-	DImagePullSecretName    = "ibm-entitlement-key"
-	DStrimzOperator         = "StrimzOperator"
-	DStrimzOperatorName     = "strimzi-kafka-operator"
-	DOpenshiftOperatorNS    = "openshift-operators"
-	DServerlessOperator     = "ServerlessOperator"
-	DServerlessOperatorName = "serverless-operator"
-	DServerlessNamespace    = "ServerlessNamespace"
-	DKnativeServingInstance = "KnativeServingInstance"
-	DKnativeEveningInstance = "KnativeEveningInstance"
+	DNamespace               = "Namespace"
+	DImageContentPolicy      = "ImageContentPolicy"
+	DImageContentPolicyName  = "mirror-config"
+	DImagePullSecret         = "ImagePullSecret"
+	DImagePullSecretName     = "ibm-entitlement-key"
+	AirGapImagePullSecetName = "private-repo-key"
+	DStrimzOperator          = "StrimzOperator"
+	DStrimzOperatorName      = "strimzi-kafka-operator"
+	DOpenshiftOperatorNS     = "openshift-operators"
+	DServerlessOperator      = "ServerlessOperator"
+	DServerlessOperatorName  = "serverless-operator"
+	DServerlessNamespace     = "ServerlessNamespace"
+	DKnativeServingInstance  = "KnativeServingInstance"
+	DKnativeEveningInstance  = "KnativeEveningInstance"
 
 	CatalogSource    = "CatalogSource"
 	OCPMarketplaceNS = "openshift-marketplace"
@@ -182,7 +184,12 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	}
 
 	//Get the imagepullsecret data in same namespace
-	cd.CommonCredentialSelectors.SecretRef.Name = DImagePullSecretName
+	if cr.Spec.ForProvider.AirGapField.IsAirGap {
+		cd.CommonCredentialSelectors.SecretRef.Name = AirGapImagePullSecetName
+	} else {
+		cd.CommonCredentialSelectors.SecretRef.Name = DImagePullSecretName
+	}
+
 	data, err = resource.CommonCredentialExtractor(ctx, cd.Source, c.kube, cd.CommonCredentialSelectors)
 
 	return &external{
@@ -227,17 +234,17 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	//Check image content policy
-	/*
+	if cr.Spec.ForProvider.AirGapField.IsAirGap {
 		err = e.observeImageContentPolicy(ctx)
 		if err != nil {
 			return managed.ExternalObservation{
 				ResourceExists: false,
 			}, nil
 		}
-	*/
+	}
 
 	//Check image pull secret
-	err = e.observeImagePullSecret(ctx)
+	err = e.observeImagePullSecret(ctx, cr)
 	if err != nil {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -331,9 +338,9 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	case dependency == DNamespace:
 		e.createNamespace(ctx)
 	case dependency == DImageContentPolicy:
-		e.createImageContentPolicy(ctx)
+		e.createImageContentPolicy(ctx, cr)
 	case dependency == DImagePullSecret:
-		e.createImagePullSecret(ctx)
+		e.createImagePullSecret(ctx, cr)
 	case dependency == DStrimzOperator:
 		e.createStrimzOperator(ctx)
 	case dependency == DServerlessOperator:
@@ -432,7 +439,28 @@ func (e *external) observeImageContentPolicy(ctx context.Context) error {
 	return nil
 }
 
-func (e *external) createImageContentPolicy(ctx context.Context) error {
+func (e *external) getImageMirrors(ctx context.Context, cr *v1alpha1.Dependency) (map[string][]string, error) {
+	priRepo := cr.Spec.ForProvider.AirGapField.PriRepo
+
+	registries = map[string][]string{
+		"cp.icr.io/cp":                              {priRepo + "/cp"},
+		"docker.io/ibmcom":                          {priRepo + "/ibmcom"},
+		"quay.io/opencloudio":                       {priRepo + "/opencloudio"},
+		"cp.icr.io/cp/cpd":                          {priRepo + "/cpd"},
+		"icr.io/cpopen":                             {priRepo + "/cpopen"},
+		"quay.io/openshift-release-dev":             {priRepo + "/openshift-release-dev"},
+		"registry.redhat.io/openshift4":             {priRepo + "/openshift4"},
+		"registry.redhat.io/openshift-serverless-1": {priRepo + "/openshift-serverless-1"},
+		"registry.redhat.io/redhat":                 {priRepo + "/redhat"},
+		"registry.redhat.io/ocs4":                   {priRepo + "/ocs4"},
+		"docker.io/strimzi":                         {priRepo + "/strimzi"},
+		"registry.redhat.io/openshift-service-mesh": {priRepo + "/openshift-service-mesh"},
+	}
+
+	return registries, nil
+}
+
+func (e *external) createImageContentPolicy(ctx context.Context, cr *v1alpha1.Dependency) error {
 
 	e.logger.Info("Create ImageContentPolicy for aiops ")
 
@@ -440,6 +468,13 @@ func (e *external) createImageContentPolicy(ctx context.Context) error {
 	if err != nil {
 		e.logger.Info("Create ocp client error")
 		return err
+	}
+	if cr.Spec.ForProvider.AirGapField.IsAirGap {
+		registries, err = e.getImageMirrors(ctx, cr)
+		if err != nil {
+			e.logger.Info("Get private image registries mirrors error")
+			return err
+		}
 	}
 
 	mirrors := []openshiftv1alpha1.RepositoryDigestMirrors{}
@@ -469,11 +504,16 @@ func (e *external) createImageContentPolicy(ctx context.Context) error {
 	return nil
 }
 
-func (e *external) observeImagePullSecret(ctx context.Context) error {
-
+func (e *external) observeImagePullSecret(ctx context.Context, cr *v1alpha1.Dependency) error {
+	var err error
 	e.logger.Info("Observe ImagePullSecret existing for aiops ")
 
-	_, err := e.kube.CoreV1().Secrets(aiopsNamespace).Get(ctx, DImagePullSecretName, metav1.GetOptions{})
+	if cr.Spec.ForProvider.AirGapField.IsAirGap {
+		_, err = e.kube.CoreV1().Secrets(aiopsNamespace).Get(ctx, AirGapImagePullSecetName, metav1.GetOptions{})
+	} else {
+		_, err = e.kube.CoreV1().Secrets(aiopsNamespace).Get(ctx, DImagePullSecretName, metav1.GetOptions{})
+	}
+
 	if err != nil {
 		return err
 	}
@@ -481,21 +521,27 @@ func (e *external) observeImagePullSecret(ctx context.Context) error {
 	return nil
 }
 
-func (e *external) createImagePullSecret(ctx context.Context) error {
+func (e *external) createImagePullSecret(ctx context.Context, cr *v1alpha1.Dependency) error {
 	e.logger.Info("Creating ImagePullSecret for aiops ")
+	var secretName string
+	if cr.Spec.ForProvider.AirGapField.IsAirGap {
+		secretName = AirGapImagePullSecetName
+	} else {
+		secretName = DImagePullSecretName
+	}
 	secretSource := corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      DImagePullSecretName,
-			Namespace: aiopsNamespace,
+			Name:      secretName,
+			Namespace: OCPConfNamespace,
 		},
 		Data: map[string][]byte{
 			".dockerconfigjson": e.pullsecret,
 		},
 		Type: "kubernetes.io/dockerconfigjson",
 	}
-	secretobj, err := e.kube.CoreV1().Secrets(aiopsNamespace).Create(context.TODO(), &secretSource, metav1.CreateOptions{})
+	secretobj, err := e.kube.CoreV1().Secrets(OCPConfNamespace).Create(context.TODO(), &secretSource, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
-		e.logger.Info("create imagePullSecret error , namespace : " + aiopsNamespace)
+		e.logger.Info("create imagePullSecret error , namespace : " + OCPConfNamespace)
 		return err
 	}
 	e.logger.Info("imagePullSecret created " + secretobj.Name)
@@ -925,4 +971,3 @@ func (e *external) createAIOpsSubscription(ctx context.Context) error {
 	e.logger.Info("AIOPS subscription are created ")
 	return nil
 }
-

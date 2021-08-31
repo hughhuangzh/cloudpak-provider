@@ -62,9 +62,21 @@ spec:
               forProvider:
                 description: MyTypeParameters are the configurable fields of a MyType.
                 properties:
+                  airGap:
+                    description: AirGapData are the configurable fields of AirGap
+                      env
+                    properties:
+                      isAirGap:
+                        type: boolean
+                      privateRepo:
+                        type: string
+                    required:
+                    - isAirGap
+                    type: object
                   configurableField:
                     type: string
                 required:
+                - airGap
                 - configurableField
                 type: object
               providerConfigRef:

@@ -22,9 +22,16 @@ import (
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 )
 
+// AirGapData are the configurable fields of AirGap env
+type AirGapData struct {
+	IsAirGap bool   `json:"isAirGap"`
+	PriRepo  string `json:"privateRepo,omitempty"`
+}
+
 // MyTypeParameters are the configurable fields of a MyType.
 type DependencyParameters struct {
-	ConfigurableField string `json:"configurableField"`
+	ConfigurableField string     `json:"configurableField"`
+	AirGapField       AirGapData `json:"airGap"`
 }
 
 // MyTypeObservation are the observable fields of a MyType.

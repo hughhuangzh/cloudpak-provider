@@ -5,5 +5,8 @@ metadata:
 spec:
   forProvider:
     configurableField: test
+    airGap:
+      isAirGap: true
+      privateRepo: dents1.fyre.ibm.com:5000
   providerConfigRef:
     name: example
